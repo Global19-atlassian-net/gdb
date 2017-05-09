@@ -1,11 +1,12 @@
 package gdb
 
 import (
-	"github.com/kr/pty"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
+
+	"github.com/kr/pty"
 )
 
 // Gdb represents a GDB instance. It implements the ReadWriter interface to
@@ -18,7 +19,7 @@ type Gdb struct {
 	cmd *exec.Cmd
 
 	mutex  sync.RWMutex
-	stdin  io.WriteCloser
+	Stdin  io.WriteCloser
 	stdout io.ReadCloser
 
 	sequence int64
@@ -72,7 +73,7 @@ func NewCmd(cmd []string, onNotification NotificationCallback) (*Gdb, error) {
 	if err != nil {
 		return nil, err
 	}
-	gdb.stdin = stdin
+	gdb.Stdin = stdin
 
 	// GDB standard ouput
 	stdout, err := gdb.cmd.StdoutPipe()

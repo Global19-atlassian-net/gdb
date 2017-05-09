@@ -3,6 +3,7 @@ package gdb
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,14 +15,19 @@ import (
 // notification sent by GDB.
 type NotificationCallback func(notification map[string]interface{})
 
-// Send issues a command to GDB. Operation is the name of the MI2 command to
+// Send - Same as SendWithContext, with the Background context.
+func (gdb *Gdb) Send(operation string, arguments ...string) (map[string]interface{}, error) {
+	return gdb.SendWithContext(context.Background(), operation, arguments...)
+}
+
+// SendWithContext issues a command to GDB. Operation is the name of the MI2 command to
 // execute without the leading "-" (this means that it is impossible send a CLI
 // command), arguments is an optional list of arguments, in GDB parlance the can
 // be: options, parameters or "--". It returns a generic object which represents
 // the reply of GDB or an error in case the command cannot be delivered to GDB.
-func (gdb *Gdb) Send(operation string, arguments ...string) (map[string]interface{}, error) {
+func (gdb *Gdb) SendWithContext(ctx context.Context, operation string, arguments ...string) (map[string]interface{}, error) {
 	// atomically increase the sequence number and queue a pending command
-	pending := make(chan map[string]interface{})
+	pending := make(chan map[string]interface{}, 1)
 	gdb.mutex.Lock()
 	sequence := strconv.FormatInt(gdb.sequence, 10)
 	gdb.pending[sequence] = pending
@@ -43,19 +49,28 @@ func (gdb *Gdb) Send(operation string, arguments ...string) (map[string]interfac
 	buffer.WriteByte('\n')
 
 	// send the command
-	if _, err := gdb.stdin.Write(buffer.Bytes()); err != nil {
+	if _, err := gdb.Stdin.Write(buffer.Bytes()); err != nil {
 		return nil, err
 	}
 
 	// wait for a response
-	result := <-pending
-	gdb.mutex.Lock()
-	delete(gdb.pending, sequence)
-	gdb.mutex.Unlock()
-	return result, nil
+	select {
+	case result := <-pending:
+		gdb.mutex.Lock()
+		delete(gdb.pending, sequence)
+		gdb.mutex.Unlock()
+		return result, nil
+	case <-ctx.Done():
+		gdb.mutex.Lock()
+		delete(gdb.pending, sequence)
+		gdb.mutex.Unlock()
+		return nil, ctx.Err()
+	}
+
 }
 
 func (gdb *Gdb) recordReader() {
+
 	scanner := bufio.NewScanner(gdb.stdout)
 	for scanner.Scan() {
 		// scan the GDB output one line at a time skipping the GDB terminator
@@ -68,14 +83,17 @@ func (gdb *Gdb) recordReader() {
 		// notification
 		record := parseRecord(line)
 		sequence, isResult := record[sequenceKey]
+		isResult = isResult && (sequence != "")
 		if isResult {
 			// if it is a result record remove the sequence field and complete
 			// the pending command
 			delete(record, sequenceKey)
 			gdb.mutex.RLock()
-			pending := gdb.pending[sequence.(string)]
+			pending, ok := gdb.pending[sequence.(string)]
 			gdb.mutex.RUnlock()
-			pending <- record
+			if ok {
+				pending <- record
+			} // TODO: LOG if not OK
 		} else {
 			if gdb.onNotification != nil {
 				gdb.onNotification(record)

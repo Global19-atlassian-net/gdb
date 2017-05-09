@@ -19,12 +19,26 @@ type parser struct {
 	output map[string]interface{}
 }
 
+func fixgdbbug(input string) string {
+	inlen := len(input)
+	if inlen < 2 {
+		return input
+	}
+	if input[inlen-2] == '\\' && input[inlen-1] == 'n' {
+		return input[:inlen-2]
+	}
+	return input
+}
+
 func lexer(input string) <-chan token { // no checks here...
 	position := 0
 	state := normal
 	tokens := make(chan token)
 	var value []byte
 	go func() {
+
+		input = fixgdbbug(input)
+
 		for position < len(input) {
 			next := input[position]
 			switch state {
